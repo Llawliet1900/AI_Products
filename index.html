@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LightTrace — 图片追光特效</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--surface:#12121e;--surface2:#1a1a2a;
+  --border:#262638;--text:#e2e2ec;--text2:#7c7c96;
+  --accent:#6c8aff;--accent2:#4a6aff;--accent-glow:rgba(108,138,255,.3);
+}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;
+  background:var(--bg);color:var(--text);
+  display:flex;flex-direction:column;overflow:hidden;user-select:none;
+}
+
+/* Header */
+.header{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;letter-spacing:.5px}
+.header h1 .hl{color:var(--accent)}
+.header-right{font-size:12px;color:var(--text2)}
+
+/* Main */
+.main{display:flex;flex:1;overflow:hidden}
+
+/* Canvas area */
+.canvas-area{flex:1;display:flex;align-items:center;justify-content:center;position:relative;background:#050508;overflow:hidden}
+.canvas-wrap{position:relative;line-height:0;display:none}
+.canvas-wrap canvas{display:block}
+#maskCanvas{position:absolute;top:0;left:0;cursor:crosshair}
+.canvas-wrap.no-interact #maskCanvas{pointer-events:none}
+
+/* Upload */
+.upload-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(5,5,8,.94)}
+.upload-overlay.hidden{display:none}
+.upload-box{width:400px;padding:48px 36px;text-align:center;border:2px dashed var(--border);border-radius:16px;cursor:pointer;transition:.3s}
+.upload-box:hover,.upload-box.dragover{border-color:var(--accent);background:rgba(108,138,255,.05)}
+.upload-icon{font-size:48px;margin-bottom:12px;display:block}
+.upload-box h2{font-size:16px;font-weight:600;margin-bottom:6px}
+.upload-box p{font-size:12px;color:var(--text2);line-height:1.5}
+#fileInput{display:none}
+
+/* Progress */
+.progress-overlay{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(5,5,8,.88)}
+.progress-overlay.hidden{display:none}
+.progress-label{font-size:14px;margin-bottom:10px}
+.progress-track{width:200px;height:5px;background:var(--surface2);border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;width:0%;background:var(--accent);transition:width .15s}
+.progress-pct{font-size:12px;color:var(--text2);margin-top:6px}
+.progress-sub{font-size:11px;color:var(--text2);margin-top:4px}
+
+/* Sidebar */
+.sidebar{width:272px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.sidebar.disabled{pointer-events:none;opacity:.4}
+.panel{padding:14px 18px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+
+/* Slider */
+.slider-row{margin-bottom:12px}
+.slider-row:last-child{margin-bottom:0}
+.slider-header{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}
+.slider-header .v{color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
+input[type=range]{-webkit-appearance:none;width:100%;height:5px;background:var(--surface2);border-radius:3px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:var(--accent);border-radius:50%;cursor:pointer;box-shadow:0 0 6px var(--accent-glow)}
+
+/* Preview dot */
+.spot-preview{display:flex;align-items:center;justify-content:center;height:80px;margin-bottom:4px}
+.spot-dot{border-radius:50%;background:radial-gradient(circle,rgba(255,255,230,.95) 0%,rgba(255,255,200,.45) 35%,rgba(255,220,150,.1) 65%,transparent 100%);transition:width .15s,height .15s}
+
+/* Select */
+.select-row{margin-bottom:10px}
+.select-row:last-child{margin-bottom:0}
+.select-label{font-size:12px;margin-bottom:4px}
+select{width:100%;padding:7px 10px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px;outline:none;cursor:pointer}
+select:focus{border-color:var(--accent)}
+
+/* Buttons */
+.btn{display:flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:9px 14px;border:none;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;transition:.2s}
+.btn+.btn{margin-top:6px}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--accent2)}
+.btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--border)}
+
+.export-group{display:flex;flex-direction:column;gap:6px}
+
+/* Info tag */
+.info-tag{display:inline-block;padding:2px 8px;background:var(--surface2);border-radius:4px;font-size:11px;color:var(--text2);margin-top:6px}
+
+/* Status */
+.status{padding:8px 20px;font-size:11px;color:var(--text2);border-top:1px solid var(--border);background:var(--surface);text-align:center;flex-shrink:0}
+
+/* Draw hint */
+.draw-hint{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:6px 16px;background:rgba(0,0,0,.7);border-radius:20px;font-size:12px;color:var(--text2);pointer-events:none;transition:opacity .3s;z-index:5}
+.draw-hint.hidden{opacity:0}
+
+/* Start overlay */
+.start-overlay{position:absolute;inset:0;z-index:8;display:flex;align-items:flex-end;justify-content:center;padding-bottom:36px;background:transparent;pointer-events:none}
+.start-overlay.hidden{display:none}
+.start-btn{pointer-events:auto;padding:12px 32px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(108,138,255,.4);transition:.2s}
+.start-btn:hover{background:var(--accent2);transform:translateY(-1px);box-shadow:0 6px 24px rgba(108,138,255,.5)}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <h1>🔦 Light<span class="hl">Trace</span></h1>
+  <span class="header-right">图片追光特效</span>
+</header>
+
+<div class="main">
+  <div class="canvas-area" id="canvasArea">
+    <div class="upload-overlay" id="uploadOverlay">
+      <div class="upload-box" id="uploadBox">
+        <span class="upload-icon">📷</span>
+        <h2>上传图片</h2>
+        <p>拖拽图片到此处，或点击选择<br>支持 JPG / PNG / WebP · 不压缩原图</p>
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp">
+      </div>
+    </div>
+    <div class="progress-overlay hidden" id="progressOverlay">
+      <div class="progress-label" id="progressLabel">正在导出...</div>
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-pct" id="progressPct">0%</div>
+      <div class="progress-sub" id="progressSub"></div>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="imgCanvas"></canvas>
+      <canvas id="maskCanvas"></canvas>
+    </div>
+    <div class="start-overlay hidden" id="startOverlay">
+      <button class="start-btn" id="startBtn">✨ 开始画线</button>
+    </div>
+    <div class="draw-hint hidden" id="drawHint">在图片上按住鼠标画线</div>
+  </div>
+
+  <div class="sidebar disabled" id="sidebar">
+    <!-- Spotlight -->
+    <div class="panel">
+      <div class="panel-title">追光设置</div>
+      <div class="spot-preview">
+        <div class="spot-dot" id="spotDot" style="width:36px;height:36px"></div>
+      </div>
+      <div class="slider-row">
+        <div class="slider-header"><span>追光大小</span><span class="v" id="sizeV">120px</span></div>
+        <input type="range" id="sizeR" min="20" max="400" value="120">
+      </div>
+      <div class="slider-row">
+        <div class="slider-header"><span>揭幕时长</span><span class="v" id="revealV">1.5s</span></div>
+        <input type="range" id="revealR" min="300" max="3000" value="1500" step="100">
+      </div>
+    </div>
+    <!-- Image info -->
+    <div class="panel" id="imgInfoPanel" style="display:none">
+      <div class="panel-title">图片信息</div>
+      <div class="info-tag" id="imgInfo"></div>
+    </div>
+    <!-- Actions -->
+    <div class="panel">
+      <div class="panel-title">操作</div>
+      <button class="btn btn-primary" id="btnPlay" disabled>▶ 回放追光</button>
+      <button class="btn btn-ghost" id="btnReset" disabled>↺ 重新画线</button>
+      <button class="btn btn-ghost" id="btnNewImg">📂 更换图片</button>
+    </div>
+    <!-- Export -->
+    <div class="panel">
+      <div class="panel-title">导出设置</div>
+      <div class="select-row">
+        <div class="select-label">视频分辨率</div>
+        <select id="resSelect">
+          <option value="720">720p (1280×720)</option>
+          <option value="1080" selected>1080p (1920×1080)</option>
+          <option value="1440">2K (2560×1440)</option>
+          <option value="original">原图分辨率</option>
+        </select>
+      </div>
+      <div class="select-row">
+        <div class="select-label">视频格式</div>
+        <select id="fmtSelect">
+          <option value="mp4" selected>MP4 (H.264)</option>
+          <option value="webm">WebM (VP9)</option>
+        </select>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">导出</div>
+      <div class="export-group">
+        <button class="btn btn-primary" id="btnVideo" disabled>📹 导出视频</button>
+        <button class="btn btn-ghost" id="btnGIF" disabled>🎞 导出 GIF</button>
+        <button class="btn btn-ghost" id="btnCover" disabled>🖼 导出封面图</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="status" id="status">请上传一张图片开始</div>
+
+<script type="module">
+import { Muxer, ArrayBufferTarget } from 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs';
+import { GIFEncoder, quantize, applyPalette } from 'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js';
+
+/* ===== DOM ===== */
+const $ = id => document.getElementById(id);
+const uploadOverlay=$('uploadOverlay'), uploadBox=$('uploadBox'), fileInput=$('fileInput');
+const canvasWrap=$('canvasWrap'), imgCanvas=$('imgCanvas'), maskCanvas=$('maskCanvas');
+const canvasArea=$('canvasArea'), sidebar=$('sidebar'), drawHint=$('drawHint');
+const startOverlay=$('startOverlay'), startBtn=$('startBtn');
+const progressOverlay=$('progressOverlay'), progressFill=$('progressFill');
+const progressPct=$('progressPct'), progressLabel=$('progressLabel'), progressSub=$('progressSub');
+const statusEl=$('status'), imgInfoPanel=$('imgInfoPanel'), imgInfoEl=$('imgInfo');
+const sizeR=$('sizeR'), sizeV=$('sizeV'), revealR=$('revealR'), revealV=$('revealV'), spotDot=$('spotDot');
+const btnPlay=$('btnPlay'), btnReset=$('btnReset'), btnNewImg=$('btnNewImg');
+const btnVideo=$('btnVideo'), btnGIF=$('btnGIF'), btnCover=$('btnCover');
+const resSelect=$('resSelect'), fmtSelect=$('fmtSelect');
+
+const imgCtx = imgCanvas.getContext('2d');
+const maskCtx = maskCanvas.getContext('2d');
+
+/* ===== State ===== */
+let img = null;
+let natW = 0, natH = 0;
+let dispW = 0, dispH = 0;
+let dispScale = 1;
+let path = [];
+let drawing = false;
+let t0 = 0;
+let phase = 'empty';
+let spotSize = 120;
+let revealMs = 1500;
+let rafId = null;
+let coverCanvas = null;
+
+/* ===== Upload ===== */
+uploadBox.onclick = () => fileInput.click();
+fileInput.onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+uploadBox.ondragover = e => { e.preventDefault(); uploadBox.classList.add('dragover'); };
+uploadBox.ondragleave = () => uploadBox.classList.remove('dragover');
+uploadBox.ondrop = e => {
+  e.preventDefault(); uploadBox.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) loadFile(f);
+};
+
+btnNewImg.onclick = () => {
+  stop(); phase = 'empty'; path = [];
+  canvasWrap.style.display = 'none';
+  uploadOverlay.classList.remove('hidden');
+  startOverlay.classList.add('hidden');
+  sidebar.classList.add('disabled');
+  drawHint.classList.add('hidden');
+  imgInfoPanel.style.display = 'none';
+  ui(); setStatus('请上传一张图片开始');
+  fileInput.value = '';
+};
+
+function loadFile(file) {
+  const r = new FileReader();
+  r.onload = ev => {
+    img = new Image();
+    img.onload = () => {
+      natW = img.naturalWidth;
+      natH = img.naturalHeight;
+      fitCanvas();
+      uploadOverlay.classList.add('hidden');
+      canvasWrap.style.display = 'block';
+      canvasWrap.classList.add('no-interact');
+      sidebar.classList.remove('disabled');
+      phase = 'preview';
+      path = [];
+      drawHint.classList.add('hidden');
+      imgInfoPanel.style.display = '';
+      imgInfoEl.textContent = `${natW} × ${natH}px`;
+      maskCtx.clearRect(0, 0, dispW, dispH);
+      startOverlay.classList.remove('hidden');
+      ui(); setStatus('预览图片 · 点击「开始画线」进入追光模式');
+    };
+    img.src = ev.target.result;
+  };
+  r.readAsDataURL(file);
+}
+
+startBtn.onclick = () => {
+  if (phase !== 'preview') return;
+  startOverlay.classList.add('hidden');
+  canvasWrap.classList.remove('no-interact');
+  phase = 'idle';
+  blackMask();
+  drawHint.classList.remove('hidden');
+  ui(); setStatus('在图片上按住鼠标画线');
+};
+
+function fitCanvas() {
+  const rect = canvasArea.getBoundingClientRect();
+  const maxW = rect.width - 32, maxH = rect.height - 32;
+  dispScale = Math.min(maxW / natW, maxH / natH, 1);
+  dispW = Math.round(natW * dispScale);
+  dispH = Math.round(natH * dispScale);
+  imgCanvas.width = maskCanvas.width = dispW;
+  imgCanvas.height = maskCanvas.height = dispH;
+  imgCtx.imageSmoothingEnabled = true;
+  imgCtx.imageSmoothingQuality = 'high';
+  imgCtx.drawImage(img, 0, 0, dispW, dispH);
+}
+
+/* ===== Mask / Spotlight ===== */
+function blackMask(alpha = 1) {
+  maskCtx.globalCompositeOperation = 'source-over';
+  maskCtx.globalAlpha = 1;
+  maskCtx.clearRect(0, 0, dispW, dispH);
+  if (alpha > 0.005) {
+    maskCtx.fillStyle = `rgba(0,0,0,${alpha})`;
+    maskCtx.fillRect(0, 0, dispW, dispH);
+  }
+}
+
+function cutSpot(ctx, x, y, r) {
+  ctx.globalCompositeOperation = 'destination-out';
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0,    'rgba(0,0,0,1)');
+  g.addColorStop(0.25, 'rgba(0,0,0,0.97)');
+  g.addColorStop(0.5,  'rgba(0,0,0,0.7)');
+  g.addColorStop(0.75, 'rgba(0,0,0,0.2)');
+  g.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* ===== Drawing ===== */
+maskCanvas.onmousedown = e => {
+  if (phase !== 'idle' && phase !== 'ready' && phase !== 'revealed') return;
+  stop(); drawing = true; phase = 'drawing';
+  path = []; t0 = performance.now();
+  const p = pos(e);
+  path.push({ x: p.x, y: p.y, t: 0 });
+  blackMask(); cutSpot(maskCtx, p.x, p.y, spotSize);
+  drawHint.classList.add('hidden');
+  ui(); setStatus('正在画线...');
+};
+maskCanvas.onmousemove = e => {
+  if (!drawing) return;
+  const p = pos(e);
+  path.push({ x: p.x, y: p.y, t: performance.now() - t0 });
+  blackMask(); cutSpot(maskCtx, p.x, p.y, spotSize);
+};
+maskCanvas.onmouseup = maskCanvas.onmouseleave = () => {
+  if (!drawing) return;
+  drawing = false;
+  if (path.length < 3) { phase='idle'; blackMask(); drawHint.classList.remove('hidden'); ui(); setStatus('画线太短，请重试'); return; }
+  phase = 'ready'; blackMask();
+  ui(); setStatus(`路径 ${path.length} 点 · 点击「回放追光」预览效果`);
+};
+function pos(e) {
+  const r = maskCanvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+/* ===== Interpolation ===== */
+function lerp(t) {
+  if (t <= 0) return { x: path[0].x, y: path[0].y };
+  for (let i = 1; i < path.length; i++) {
+    if (t <= path[i].t) {
+      const a = path[i-1], b = path[i], d = b.t - a.t;
+      const f = d > 0 ? (t - a.t) / d : 0;
+      return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+    }
+  }
+  const last = path[path.length-1];
+  return { x: last.x, y: last.y };
+}
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+/* ===== Playback (on screen) ===== */
+btnPlay.onclick = () => {
+  if (path.length < 3) return;
+  stop(); phase = 'playing';
+  canvasWrap.classList.add('no-interact');
+  ui(); setStatus('追光回放中...');
+  const pathDur = path[path.length-1].t;
+  const start = performance.now();
+  let coverDone = false;
+  function tick() {
+    const el = performance.now() - start;
+    if (el <= pathDur) {
+      const p = lerp(el);
+      blackMask(); cutSpot(maskCtx, p.x, p.y, spotSize);
+      if (!coverDone && el >= pathDur * 0.4) { coverDone = true; captureCover(p.x, p.y); }
+    } else if (el <= pathDur + revealMs) {
+      const alpha = 1 - easeOut(Math.min((el - pathDur) / revealMs, 1));
+      blackMask(alpha);
+    } else {
+      maskCtx.clearRect(0, 0, dispW, dispH);
+      phase = 'revealed'; canvasWrap.classList.remove('no-interact');
+      ui(); setStatus('追光完成！可导出或重新画线');
+      rafId = null; return;
+    }
+    rafId = requestAnimationFrame(tick);
+  }
+  rafId = requestAnimationFrame(tick);
+};
+
+function stop() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
+
+btnReset.onclick = () => {
+  stop(); path = []; phase = 'idle';
+  canvasWrap.classList.remove('no-interact');
+  blackMask(); drawHint.classList.remove('hidden');
+  ui(); setStatus('在图片上按住鼠标画线');
+};
+
+/* ===== Cover capture ===== */
+function captureCover(sx, sy) {
+  coverCanvas = document.createElement('canvas');
+  coverCanvas.width = natW; coverCanvas.height = natH;
+  const c = coverCanvas.getContext('2d');
+  c.drawImage(img, 0, 0, natW, natH);
+  const mc = document.createElement('canvas');
+  mc.width = natW; mc.height = natH;
+  const m = mc.getContext('2d');
+  m.fillStyle = '#000'; m.fillRect(0, 0, natW, natH);
+  const scale = natW / dispW;
+  cutSpot(m, sx * scale, sy * scale, spotSize * scale);
+  c.drawImage(mc, 0, 0);
+}
+
+/* ===== Export resolution ===== */
+function getExportDims() {
+  const val = resSelect.value;
+  if (val === 'original') {
+    let w = natW, h = natH;
+    w = w % 2 === 0 ? w : w + 1;
+    h = h % 2 === 0 ? h : h + 1;
+    return { w, h };
+  }
+  const targetH = parseInt(val);
+  const aspect = natW / natH;
+  let h = targetH;
+  let w = Math.round(h * aspect);
+  w = w % 2 === 0 ? w : w + 1;
+  h = h % 2 === 0 ? h : h + 1;
+  return { w, h };
+}
+
+/* ===== Render a frame at arbitrary resolution ===== */
+function renderFrameHQ(ctx, w, h, maskBuf, elapsed) {
+  const pathDur = path[path.length-1].t;
+  const scale = w / dispW;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
+
+  if (elapsed <= pathDur) {
+    const p = lerp(elapsed);
+    const mc = maskBuf.ctx;
+    mc.globalCompositeOperation = 'source-over';
+    mc.globalAlpha = 1;
+    mc.fillStyle = '#000';
+    mc.fillRect(0, 0, w, h);
+    cutSpot(mc, p.x * scale, p.y * scale, spotSize * scale);
+    ctx.drawImage(maskBuf.canvas, 0, 0);
+  } else {
+    const prog = Math.min((elapsed - pathDur) / revealMs, 1);
+    const alpha = 1 - easeOut(prog);
+    if (alpha > 0.005) {
+      ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+}
+
+function makeBuf(w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  return { canvas: c, ctx: c.getContext('2d') };
+}
+
+/* ================================================================
+   Export Video — MP4 via WebCodecs + mp4-muxer, WebM via MediaRecorder
+   ================================================================ */
+btnVideo.onclick = async () => {
+  if (path.length < 3) return;
+  const fmt = fmtSelect.value;
+  const { w, h } = getExportDims();
+
+  if (fmt === 'webm') {
+    exportWebM(w, h); return;
+  }
+
+  // MP4: WebCodecs VideoEncoder + mp4-muxer (hardware H.264, no Worker needed)
+  if (typeof VideoEncoder === 'undefined') {
+    setStatus('当前浏览器不支持 WebCodecs API，请使用 Chrome 94+ 或 Edge 94+');
+    return;
+  }
+
+  showProg('正在渲染帧...');
+  setSubtext(`输出 ${w}×${h} · MP4 H.264`);
+  setStatus('正在渲染帧...');
+
+  const fps = 30;
+  const pathDur = path[path.length-1].t;
+  const totalMs = pathDur + revealMs;
+  const totalFrames = Math.ceil(totalMs / (1000 / fps)) + 1;
+  const frameDurUs = Math.round(1_000_000 / fps); // microseconds
+
+  // Create canvas for rendering
+  const ec = document.createElement('canvas'); ec.width = w; ec.height = h;
+  const ectx = ec.getContext('2d');
+  const mb = makeBuf(w, h);
+
+  // Setup mp4-muxer
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    video: {
+      codec: 'avc',
+      width: w,
+      height: h,
+    },
+    fastStart: 'in-memory',
+  });
+
+  // Setup VideoEncoder
+  let encodedFrames = 0;
+  const videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => {
+      muxer.addVideoChunk(chunk, meta);
+      encodedFrames++;
+      setProg(0.5 + (encodedFrames / totalFrames) * 0.45);
+      setSubtext(`编码中 ${encodedFrames}/${totalFrames}`);
+    },
+    error: (e) => {
+      console.error('VideoEncoder error:', e);
+      hideProg();
+      setStatus('视频编码失败: ' + e.message);
+    },
+  });
+
+  videoEncoder.configure({
+    codec: 'avc1.640028',
+    width: w,
+    height: h,
+    bitrate: 8_000_000,
+    framerate: fps,
+  });
+
+  // Render & encode frames
+  for (let i = 0; i < totalFrames; i++) {
+    const elapsed = i * (1000 / fps);
+    renderFrameHQ(ectx, w, h, mb, elapsed);
+
+    const frame = new VideoFrame(ec, {
+      timestamp: i * frameDurUs,
+    });
+    videoEncoder.encode(frame, { keyFrame: i % 30 === 0 });
+    frame.close();
+
+    setProg((i / totalFrames) * 0.5);
+    setSubtext(`渲染帧 ${i + 1}/${totalFrames}`);
+
+    // Yield to UI thread every few frames
+    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  setSubtext('等待编码完成...');
+  await videoEncoder.flush();
+  videoEncoder.close();
+
+  muxer.finalize();
+  const { buffer } = muxer.target;
+  const blob = new Blob([buffer], { type: 'video/mp4' });
+  download(blob, 'LightTrace.mp4');
+
+  setProg(1);
+  hideProg();
+  setStatus(`MP4 视频导出完成！(${w}×${h})`);
+};
+
+/* WebM via native MediaRecorder */
+function exportWebM(w, h) {
+  showProg('正在导出 WebM...');
+  setSubtext(`输出 ${w}×${h}`);
+  setStatus('正在录制...');
+
+  const ec = document.createElement('canvas'); ec.width = w; ec.height = h;
+  const ectx = ec.getContext('2d');
+  const mb = makeBuf(w, h);
+
+  const stream = ec.captureStream(30);
+  const chunks = [];
+  let mime = 'video/webm;codecs=vp9';
+  if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
+  if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
+
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(chunks, { type: mime });
+    download(blob, 'LightTrace.webm');
+    hideProg(); setStatus(`WebM 导出完成！(${w}×${h})`);
+  };
+  rec.start();
+
+  const pathDur = path[path.length-1].t;
+  const total = pathDur + revealMs + 200;
+  const startT = performance.now();
+
+  function tick() {
+    const el = performance.now() - startT;
+    setProg(Math.min(el / total, 1));
+    renderFrameHQ(ectx, w, h, mb, el);
+    if (el < total) requestAnimationFrame(tick);
+    else rec.stop();
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ================================================================
+   Export GIF — gifenc (pure JS, main thread, no Worker)
+   ================================================================ */
+btnGIF.onclick = async () => {
+  if (path.length < 3) return;
+
+  showProg('正在生成 GIF...');
+  const maxW = 480;
+  const gifScale = Math.min(maxW / dispW, 1);
+  const gw = Math.round(dispW * gifScale);
+  const gh = Math.round(dispH * gifScale);
+  const imgToGif = gw / dispW;
+
+  const pathDur = path[path.length-1].t;
+  const total = pathDur + revealMs;
+  const fps = 15, dt = 1000 / fps;
+  const n = Math.ceil(total / dt);
+
+  const fc = document.createElement('canvas'); fc.width = gw; fc.height = gh;
+  const fctx = fc.getContext('2d');
+  const fm = document.createElement('canvas'); fm.width = gw; fm.height = gh;
+  const fmctx = fm.getContext('2d');
+
+  setSubtext(`生成 ${gw}×${gh} · ${n + 1} 帧`);
+  setStatus('正在生成 GIF...');
+
+  const gif = GIFEncoder();
+
+  for (let i = 0; i <= n; i++) {
+    const el = Math.min(i * dt, total);
+    setProg(i / (n + 1) * 0.6);
+    setSubtext(`渲染帧 ${i + 1}/${n + 1}`);
+
+    fctx.globalCompositeOperation = 'source-over';
+    fctx.globalAlpha = 1;
+    fctx.drawImage(img, 0, 0, gw, gh);
+
+    if (el <= pathDur) {
+      const p = lerp(el);
+      fmctx.globalCompositeOperation = 'source-over';
+      fmctx.globalAlpha = 1;
+      fmctx.fillStyle = '#000';
+      fmctx.fillRect(0, 0, gw, gh);
+      cutSpot(fmctx, p.x * imgToGif, p.y * imgToGif, spotSize * imgToGif);
+      fctx.drawImage(fm, 0, 0);
+    } else {
+      const prog = Math.min((el - pathDur) / revealMs, 1);
+      const alpha = 1 - easeOut(prog);
+      if (alpha > 0.005) {
+        fctx.fillStyle = `rgba(0,0,0,${alpha})`;
+        fctx.fillRect(0, 0, gw, gh);
+      }
+    }
+
+    const { data } = fctx.getImageData(0, 0, gw, gh);
+    const palette = quantize(data, 256);
+    const index = applyPalette(data, palette);
+    gif.writeFrame(index, gw, gh, { palette, delay: Math.round(dt), repeat: 0 });
+
+    // Yield to UI every few frames
+    if (i % 3 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  setProg(0.9);
+  setSubtext('正在封装 GIF...');
+  gif.finish();
+  const bytes = gif.bytes();
+  const blob = new Blob([bytes], { type: 'image/gif' });
+  download(blob, 'LightTrace.gif');
+
+  setProg(1);
+  hideProg();
+  setStatus(`GIF 导出完成！(${gw}×${gh})`);
+};
+
+/* ===== Export Cover ===== */
+btnCover.onclick = () => {
+  if (!coverCanvas && path.length >= 3) {
+    const t = path[path.length-1].t * 0.4;
+    const p = lerp(t);
+    captureCover(p.x, p.y);
+  }
+  if (!coverCanvas) return;
+  coverCanvas.toBlob(b => {
+    download(b, 'LightTrace-cover.jpg');
+    setStatus(`封面图已保存 (${natW}×${natH})`);
+  }, 'image/jpeg', 0.95);
+};
+
+/* ===== Helpers ===== */
+function download(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = u; a.download = name;
+  a.click(); setTimeout(() => URL.revokeObjectURL(u), 5000);
+}
+function showProg(label) {
+  progressLabel.textContent = label || '正在导出...';
+  progressSub.textContent = '';
+  progressOverlay.classList.remove('hidden'); setProg(0);
+}
+function hideProg() { progressOverlay.classList.add('hidden'); }
+function setProg(p) {
+  const pct = Math.round(p * 100);
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = pct + '%';
+}
+function setSubtext(t) { progressSub.textContent = t; }
+function setStatus(msg) { statusEl.textContent = msg; }
+function ui() {
+  const ok = path.length >= 3 && (phase === 'ready' || phase === 'revealed');
+  btnPlay.disabled = btnReset.disabled = btnVideo.disabled = btnGIF.disabled = btnCover.disabled = !ok;
+}
+
+/* ===== Sliders ===== */
+sizeR.oninput = () => {
+  spotSize = +sizeR.value;
+  sizeV.textContent = spotSize + 'px';
+  const s = Math.max(12, spotSize / 400 * 60);
+  spotDot.style.width = s + 'px'; spotDot.style.height = s + 'px';
+};
+revealR.oninput = () => {
+  revealMs = +revealR.value;
+  revealV.textContent = (revealMs / 1000).toFixed(1) + 's';
+};
+</script>
+</body>
+</html>
