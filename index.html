@@ -160,8 +160,8 @@ select:focus{border-color:var(--accent)}
       <div class="upload-box" id="uploadBox">
         <span class="upload-icon">📷</span>
         <h2>上传图片</h2>
-        <p>拖拽图片到此处，或点击选择<br>支持 JPG / PNG / WebP · 不压缩原图</p>
-        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp">
+        <p>拖拽图片到此处，或点击选择<br>支持 JPG / PNG / WebP / HEIC · 不压缩原图</p>
+        <input type="file" id="fileInput" accept="image/*">
       </div>
     </div>
     <div class="progress-overlay hidden" id="progressOverlay">
@@ -286,6 +286,7 @@ if (_isIOS) fmtSelect.value = 'mov';
 
 /* ===== State ===== */
 let img = null;
+let currentObjectUrl = null;  // tracks Object URL for memory cleanup
 let natW = 0, natH = 0;
 let dispW = 0, dispH = 0;
 let dispScale = 1;
@@ -311,6 +312,7 @@ uploadBox.ondrop = e => {
 
 btnNewImg.onclick = () => {
   stop(); phase = 'empty'; path = [];
+  if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   canvasWrap.style.display = 'none';
   uploadOverlay.classList.remove('hidden');
   startOverlay.classList.add('hidden');
@@ -322,29 +324,32 @@ btnNewImg.onclick = () => {
 };
 
 function loadFile(file) {
-  const r = new FileReader();
-  r.onload = ev => {
-    img = new Image();
-    img.onload = () => {
-      natW = img.naturalWidth;
-      natH = img.naturalHeight;
-      fitCanvas();
-      uploadOverlay.classList.add('hidden');
-      canvasWrap.style.display = 'block';
-      canvasWrap.classList.add('no-interact');
-      sidebar.classList.remove('disabled');
-      phase = 'preview';
-      path = [];
-      drawHint.classList.add('hidden');
-      imgInfoPanel.style.display = '';
-      imgInfoEl.textContent = `${natW} × ${natH}px`;
-      maskCtx.clearRect(0, 0, dispW, dispH);
-      startOverlay.classList.remove('hidden');
-      ui(); setStatus('预览图片 · 点击「开始画线」进入追光模式');
-    };
-    img.src = ev.target.result;
+  // Use Object URL instead of DataURL to avoid base64 overhead and preserve original quality
+  // DataURL causes 33% memory bloat and may trigger iOS implicit downsampling on large images
+  if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
+  const objectUrl = URL.createObjectURL(file);
+  currentObjectUrl = objectUrl;
+  const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
+
+  img = new Image();
+  img.onload = () => {
+    natW = img.naturalWidth;
+    natH = img.naturalHeight;
+    fitCanvas();
+    uploadOverlay.classList.add('hidden');
+    canvasWrap.style.display = 'block';
+    canvasWrap.classList.add('no-interact');
+    sidebar.classList.remove('disabled');
+    phase = 'preview';
+    path = [];
+    drawHint.classList.add('hidden');
+    imgInfoPanel.style.display = '';
+    imgInfoEl.textContent = `${natW} × ${natH}px · ${fileSizeMB}MB`;
+    maskCtx.clearRect(0, 0, dispW, dispH);
+    startOverlay.classList.remove('hidden');
+    ui(); setStatus('预览图片 · 点击「开始画线」进入追光模式');
   };
-  r.readAsDataURL(file);
+  img.src = objectUrl;
 }
 
 startBtn.onclick = () => {
