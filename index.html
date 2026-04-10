@@ -95,6 +95,20 @@ select:focus{border-color:var(--accent)}
 /* Status */
 .status{padding:8px 20px;font-size:11px;color:var(--text2);border-top:1px solid var(--border);background:var(--surface);text-align:center;flex-shrink:0}
 
+/* Save modal (iOS) */
+.save-modal-overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.75);opacity:0;pointer-events:none;transition:opacity .25s}
+.save-modal-overlay.active{opacity:1;pointer-events:auto}
+.save-modal{width:92vw;max-width:420px;background:var(--surface);border-radius:16px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+.save-modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.save-modal-header h3{font-size:15px;font-weight:600}
+.save-modal-close{background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer;padding:4px 8px;line-height:1}
+.save-modal-body{padding:16px 18px;text-align:center}
+.save-modal-body video,.save-modal-body img{max-width:100%;max-height:40vh;border-radius:8px;margin-bottom:12px;background:#000}
+.save-modal-tip{font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:14px}
+.save-modal-tip strong{color:var(--text)}
+.save-modal-actions{display:flex;flex-direction:column;gap:8px}
+.save-modal-actions .btn{font-size:13px}
+
 /* Draw hint */
 .draw-hint{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:6px 16px;background:rgba(0,0,0,.7);border-radius:20px;font-size:12px;color:var(--text2);pointer-events:none;transition:opacity .3s;z-index:5}
 .draw-hint.hidden{opacity:0}
@@ -221,6 +235,21 @@ select:focus{border-color:var(--accent)}
         <button class="btn btn-ghost" id="btnGIF" disabled>🎞 导出 GIF</button>
         <button class="btn btn-ghost" id="btnCover" disabled>🖼 导出封面图</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- iOS save modal -->
+<div class="save-modal-overlay" id="saveModal">
+  <div class="save-modal">
+    <div class="save-modal-header">
+      <h3 id="saveModalTitle">保存文件</h3>
+      <button class="save-modal-close" id="saveModalClose">✕</button>
+    </div>
+    <div class="save-modal-body">
+      <div id="saveModalPreview"></div>
+      <div class="save-modal-tip" id="saveModalTip"></div>
+      <div class="save-modal-actions" id="saveModalActions"></div>
     </div>
   </div>
 </div>
@@ -773,10 +802,114 @@ btnCover.onclick = () => {
 };
 
 /* ===== Helpers ===== */
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+const saveModal = $('saveModal');
+const saveModalClose = $('saveModalClose');
+const saveModalPreview = $('saveModalPreview');
+const saveModalTip = $('saveModalTip');
+const saveModalTitle = $('saveModalTitle');
+const saveModalActions = $('saveModalActions');
+let currentBlobUrl = null;
+
+saveModalClose.onclick = closeSaveModal;
+saveModal.onclick = e => { if (e.target === saveModal) closeSaveModal(); };
+
+function closeSaveModal() {
+  saveModal.classList.remove('active');
+  saveModalPreview.innerHTML = '';
+  saveModalActions.innerHTML = '';
+  if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+}
+
 function download(blob, name) {
+  if (isIOS) {
+    showSaveModal(blob, name);
+    return;
+  }
+  // Desktop: standard <a download> behavior
   const u = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = u; a.download = name;
   a.click(); setTimeout(() => URL.revokeObjectURL(u), 5000);
+}
+
+function showSaveModal(blob, name) {
+  closeSaveModal();
+  currentBlobUrl = URL.createObjectURL(blob);
+  const isVideo = blob.type.startsWith('video/');
+  const isGIF = blob.type === 'image/gif';
+  const isImage = blob.type.startsWith('image/');
+  const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+
+  saveModalTitle.textContent = isVideo ? '保存视频' : isGIF ? '保存 GIF' : '保存图片';
+
+  // Preview element
+  if (isVideo) {
+    const v = document.createElement('video');
+    v.src = currentBlobUrl;
+    v.controls = true;
+    v.playsInline = true;
+    v.autoplay = false;
+    v.preload = 'metadata';
+    v.style.cssText = 'max-width:100%;max-height:40vh;border-radius:8px;margin-bottom:12px;background:#000';
+    saveModalPreview.appendChild(v);
+  } else {
+    const im = document.createElement('img');
+    im.src = currentBlobUrl;
+    im.style.cssText = 'max-width:100%;max-height:40vh;border-radius:8px;margin-bottom:12px;background:#000';
+    saveModalPreview.appendChild(im);
+  }
+
+  // Tips based on content type
+  if (isVideo) {
+    saveModalTip.innerHTML = `<strong>${name}</strong> · ${sizeMB} MB<br><br>` +
+      '💡 <strong>保存到相册</strong>：点击下方「在新页面打开」，播放视频后长按选择「存储到"照片"」<br>' +
+      '💡 <strong>保存到文件</strong>：点击下方「在新页面打开」，点右上角 <strong>分享按钮 ↗</strong>，选择「存储到"文件"」';
+  } else if (isGIF) {
+    saveModalTip.innerHTML = `<strong>${name}</strong> · ${sizeMB} MB<br><br>` +
+      '💡 长按上方图片，选择「添加到照片」或「存储到"文件"」';
+  } else {
+    saveModalTip.innerHTML = `<strong>${name}</strong> · ${sizeMB} MB<br><br>` +
+      '💡 长按上方图片，选择「添加到照片」或「存储到"文件"」';
+  }
+
+  // Action buttons
+  const openBtn = document.createElement('button');
+  openBtn.className = 'btn btn-primary';
+  openBtn.textContent = '🔗 在新页面打开';
+  openBtn.onclick = () => {
+    window.open(currentBlobUrl, '_blank');
+  };
+  saveModalActions.appendChild(openBtn);
+
+  // Share API (if available)
+  if (navigator.share && navigator.canShare) {
+    const shareFile = new File([blob], name, { type: blob.type });
+    if (navigator.canShare({ files: [shareFile] })) {
+      const shareBtn = document.createElement('button');
+      shareBtn.className = 'btn btn-ghost';
+      shareBtn.textContent = '📤 系统分享 / 保存';
+      shareBtn.onclick = async () => {
+        try {
+          await navigator.share({ files: [shareFile], title: name });
+          closeSaveModal();
+          setStatus('已通过系统分享');
+        } catch (e) {
+          if (e.name !== 'AbortError') setStatus('分享失败: ' + e.message);
+        }
+      };
+      saveModalActions.appendChild(shareBtn);
+    }
+  }
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-ghost';
+  closeBtn.textContent = '关闭';
+  closeBtn.onclick = closeSaveModal;
+  saveModalActions.appendChild(closeBtn);
+
+  saveModal.classList.add('active');
 }
 function showProg(label) {
   progressLabel.textContent = label || '正在导出...';
