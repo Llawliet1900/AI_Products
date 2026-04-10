@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>LightTrace — 图片追光特效</title>
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -31,13 +31,13 @@ body{
 .canvas-area{flex:1;display:flex;align-items:center;justify-content:center;position:relative;background:#050508;overflow:hidden}
 .canvas-wrap{position:relative;line-height:0;display:none}
 .canvas-wrap canvas{display:block}
-#maskCanvas{position:absolute;top:0;left:0;cursor:crosshair}
+#maskCanvas{position:absolute;top:0;left:0;cursor:crosshair;touch-action:none}
 .canvas-wrap.no-interact #maskCanvas{pointer-events:none}
 
 /* Upload */
 .upload-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(5,5,8,.94)}
 .upload-overlay.hidden{display:none}
-.upload-box{width:400px;padding:48px 36px;text-align:center;border:2px dashed var(--border);border-radius:16px;cursor:pointer;transition:.3s}
+.upload-box{width:400px;max-width:90vw;padding:48px 36px;text-align:center;border:2px dashed var(--border);border-radius:16px;cursor:pointer;transition:.3s}
 .upload-box:hover,.upload-box.dragover{border-color:var(--accent);background:rgba(108,138,255,.05)}
 .upload-icon{font-size:48px;margin-bottom:12px;display:block}
 .upload-box h2{font-size:16px;font-weight:600;margin-bottom:6px}
@@ -104,6 +104,33 @@ select:focus{border-color:var(--accent)}
 .start-overlay.hidden{display:none}
 .start-btn{pointer-events:auto;padding:12px 32px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(108,138,255,.4);transition:.2s}
 .start-btn:hover{background:var(--accent2);transform:translateY(-1px);box-shadow:0 6px 24px rgba(108,138,255,.5)}
+
+/* === iPad / Tablet responsive === */
+@media (max-width: 820px) {
+  .main{flex-direction:column}
+  .sidebar{width:100%;max-height:45vh;flex-shrink:0;border-left:none;border-top:1px solid var(--border);overflow-y:auto}
+  .canvas-area{min-height:40vh}
+  .header h1{font-size:16px}
+  .header-right{font-size:11px}
+  .panel{padding:10px 14px}
+  .spot-preview{height:50px}
+  .upload-box{padding:32px 24px}
+  .upload-icon{font-size:36px}
+}
+@media (max-width: 480px) {
+  .sidebar{max-height:50vh}
+  .header{padding:8px 14px}
+  .panel{padding:8px 12px}
+  .btn{padding:8px 10px;font-size:11px}
+  select{font-size:11px;padding:6px 8px}
+}
+/* Touch devices: larger slider thumbs */
+@media (pointer: coarse) {
+  input[type=range]::-webkit-slider-thumb{width:22px;height:22px}
+  .btn{padding:12px 14px;font-size:13px;min-height:44px}
+  select{padding:10px;font-size:13px;min-height:44px}
+  .start-btn{padding:14px 36px;font-size:15px}
+}
 </style>
 </head>
 <body>
@@ -290,8 +317,9 @@ startBtn.onclick = () => {
   canvasWrap.classList.remove('no-interact');
   phase = 'idle';
   blackMask();
+  drawHint.textContent = drawHintText;
   drawHint.classList.remove('hidden');
-  ui(); setStatus('在图片上按住鼠标画线');
+  ui(); setStatus(drawHintText);
 };
 
 function fitCanvas() {
@@ -334,32 +362,64 @@ function cutSpot(ctx, x, y, r) {
 }
 
 /* ===== Drawing ===== */
-maskCanvas.onmousedown = e => {
+const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const drawHintText = isTouch ? '在图片上按住手指画线' : '在图片上按住鼠标画线';
+
+function startDraw(x, y) {
   if (phase !== 'idle' && phase !== 'ready' && phase !== 'revealed') return;
   stop(); drawing = true; phase = 'drawing';
   path = []; t0 = performance.now();
-  const p = pos(e);
-  path.push({ x: p.x, y: p.y, t: 0 });
-  blackMask(); cutSpot(maskCtx, p.x, p.y, spotSize);
+  path.push({ x, y, t: 0 });
+  blackMask(); cutSpot(maskCtx, x, y, spotSize);
   drawHint.classList.add('hidden');
   ui(); setStatus('正在画线...');
-};
-maskCanvas.onmousemove = e => {
+}
+function moveDraw(x, y) {
   if (!drawing) return;
-  const p = pos(e);
-  path.push({ x: p.x, y: p.y, t: performance.now() - t0 });
-  blackMask(); cutSpot(maskCtx, p.x, p.y, spotSize);
-};
-maskCanvas.onmouseup = maskCanvas.onmouseleave = () => {
+  path.push({ x, y, t: performance.now() - t0 });
+  blackMask(); cutSpot(maskCtx, x, y, spotSize);
+}
+function endDraw() {
   if (!drawing) return;
   drawing = false;
   if (path.length < 3) { phase='idle'; blackMask(); drawHint.classList.remove('hidden'); ui(); setStatus('画线太短，请重试'); return; }
   phase = 'ready'; blackMask();
   ui(); setStatus(`路径 ${path.length} 点 · 点击「回放追光」预览效果`);
-};
+}
+
+/* Mouse events */
+maskCanvas.onmousedown = e => { const p = pos(e); startDraw(p.x, p.y); };
+maskCanvas.onmousemove = e => { const p = pos(e); moveDraw(p.x, p.y); };
+maskCanvas.onmouseup = maskCanvas.onmouseleave = () => endDraw();
+
+/* Touch events */
+maskCanvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const p = touchPos(e);
+  startDraw(p.x, p.y);
+}, { passive: false });
+maskCanvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const p = touchPos(e);
+  moveDraw(p.x, p.y);
+}, { passive: false });
+maskCanvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  endDraw();
+}, { passive: false });
+maskCanvas.addEventListener('touchcancel', e => {
+  e.preventDefault();
+  endDraw();
+}, { passive: false });
+
 function pos(e) {
   const r = maskCanvas.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function touchPos(e) {
+  const t = e.touches[0] || e.changedTouches[0];
+  const r = maskCanvas.getBoundingClientRect();
+  return { x: t.clientX - r.left, y: t.clientY - r.top };
 }
 
 /* ===== Interpolation ===== */
@@ -411,8 +471,10 @@ function stop() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
 btnReset.onclick = () => {
   stop(); path = []; phase = 'idle';
   canvasWrap.classList.remove('no-interact');
-  blackMask(); drawHint.classList.remove('hidden');
-  ui(); setStatus('在图片上按住鼠标画线');
+  blackMask();
+  drawHint.textContent = drawHintText;
+  drawHint.classList.remove('hidden');
+  ui(); setStatus(drawHintText);
 };
 
 /* ===== Cover capture ===== */
@@ -745,6 +807,28 @@ revealR.oninput = () => {
   revealMs = +revealR.value;
   revealV.textContent = (revealMs / 1000).toFixed(1) + 's';
 };
+
+/* ===== Init & Resize ===== */
+// Set initial draw hint text
+drawHint.textContent = drawHintText;
+
+// Handle screen rotation / resize on tablets
+window.addEventListener('resize', () => {
+  if (!img || phase === 'empty') return;
+  const oldDispW = dispW;
+  fitCanvas();
+  // Rescale existing path points to new display coordinates
+  if (path.length > 0 && oldDispW > 0) {
+    const s = dispW / oldDispW;
+    path = path.map(p => ({ x: p.x * s, y: p.y * s, t: p.t }));
+  }
+  // Redraw current state
+  if (phase === 'preview' || phase === 'revealed') {
+    maskCtx.clearRect(0, 0, dispW, dispH);
+  } else if (phase === 'idle' || phase === 'ready') {
+    blackMask();
+  }
+});
 </script>
 </body>
 </html>
