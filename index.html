@@ -613,23 +613,33 @@ btnVideo.onclick = async () => {
     exportWebM(w, h); return;
   }
 
-  // On iOS/iPadOS, cap resolution to reduce encoding pressure
-  if (isIOS && w * h > 1280 * 720) {
-    const aspect = w / h;
-    h = 720; w = Math.round(h * aspect);
-    w = w % 2 === 0 ? w : w + 1;
-    h = h % 2 === 0 ? h : h + 1;
+  // iOS/iPadOS: skip WebCodecs entirely, use MediaRecorder directly
+  // WebKit's WebCodecs is unreliable (isConfigSupported hangs, encoder fails)
+  if (isIOS) {
+    if (w * h > 1280 * 720) {
+      const aspect = w / h;
+      h = 720; w = Math.round(h * aspect);
+      w = w % 2 === 0 ? w : w + 1;
+      h = h % 2 === 0 ? h : h + 1;
+    }
+    exportMediaRecorderMP4(w, h);
+    return;
   }
 
   const fps = 30;
 
-  // Try to find a supported WebCodecs H.264 codec
+  // Desktop: try WebCodecs H.264 with codec detection + timeout
   setStatus('正在检测编码能力...');
-  const codec = await findSupportedCodec(w, h, fps);
+  let codec = null;
+  try {
+    codec = await Promise.race([
+      findSupportedCodec(w, h, fps),
+      new Promise(resolve => setTimeout(() => resolve(null), 3000)),
+    ]);
+  } catch (e) { codec = null; }
 
   if (!codec) {
-    // Fallback: use MediaRecorder (works on all browsers)
-    setStatus('当前设备不支持 H.264 编码，自动切换为兼容模式...');
+    setStatus('自动切换为兼容模式...');
     exportMediaRecorderMP4(w, h);
     return;
   }
