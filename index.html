@@ -224,6 +224,7 @@ select:focus{border-color:var(--accent)}
         <div class="select-label">视频格式</div>
         <select id="fmtSelect">
           <option value="mp4" selected>MP4 (H.264)</option>
+          <option value="mov">MOV (H.264)</option>
           <option value="webm">WebM (VP9)</option>
         </select>
       </div>
@@ -276,6 +277,12 @@ const resSelect=$('resSelect'), fmtSelect=$('fmtSelect');
 
 const imgCtx = imgCanvas.getContext('2d');
 const maskCtx = maskCanvas.getContext('2d');
+
+/* ===== iOS default format ===== */
+// isIOS is defined later in helpers section, but we need it early for UI init
+const _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (_isIOS) fmtSelect.value = 'mov';
 
 /* ===== State ===== */
 let img = null;
@@ -613,6 +620,19 @@ btnVideo.onclick = async () => {
     exportWebM(w, h); return;
   }
 
+  // MOV format: use MediaRecorder directly (MP4 container renamed to .mov, binary compatible)
+  if (fmt === 'mov') {
+    if (isIOS && w * h > 1280 * 720) {
+      const aspect = w / h;
+      h = 720; w = Math.round(h * aspect);
+      w = w % 2 === 0 ? w : w + 1;
+      h = h % 2 === 0 ? h : h + 1;
+    }
+    exportMediaRecorderVideo(w, h, 'mov');
+    return;
+  }
+
+  // MP4 format
   // iOS/iPadOS: skip WebCodecs entirely, use MediaRecorder directly
   // WebKit's WebCodecs is unreliable (isConfigSupported hangs, encoder fails)
   if (isIOS) {
@@ -622,7 +642,7 @@ btnVideo.onclick = async () => {
       w = w % 2 === 0 ? w : w + 1;
       h = h % 2 === 0 ? h : h + 1;
     }
-    exportMediaRecorderMP4(w, h);
+    exportMediaRecorderVideo(w, h, 'mp4');
     return;
   }
 
@@ -640,7 +660,7 @@ btnVideo.onclick = async () => {
 
   if (!codec) {
     setStatus('自动切换为兼容模式...');
-    exportMediaRecorderMP4(w, h);
+    exportMediaRecorderVideo(w, h, 'mp4');
     return;
   }
 
@@ -689,7 +709,7 @@ btnVideo.onclick = async () => {
   } catch (e) {
     hideProg();
     setStatus('编码器配置失败，自动切换兼容模式...');
-    exportMediaRecorderMP4(w, h);
+    exportMediaRecorderVideo(w, h, 'mp4');
     return;
   }
 
@@ -711,7 +731,7 @@ btnVideo.onclick = async () => {
     try { videoEncoder.close(); } catch(e) {}
     hideProg();
     setStatus('编码出错，自动切换兼容模式...');
-    exportMediaRecorderMP4(w, h);
+    exportMediaRecorderVideo(w, h, 'mp4');
     return;
   }
 
@@ -722,7 +742,7 @@ btnVideo.onclick = async () => {
   } catch (e) {
     hideProg();
     setStatus('编码完成阶段出错，自动切换兼容模式...');
-    exportMediaRecorderMP4(w, h);
+    exportMediaRecorderVideo(w, h, 'mp4');
     return;
   }
 
@@ -736,10 +756,11 @@ btnVideo.onclick = async () => {
   setStatus(`MP4 视频导出完成！(${w}×${h})`);
 };
 
-/* MediaRecorder fallback for MP4 (actually records as webm/mp4 depending on browser) */
-function exportMediaRecorderMP4(w, h) {
-  showProg('正在导出视频（兼容模式）...');
-  setSubtext(`输出 ${w}×${h}`);
+/* MediaRecorder video export — supports mp4/mov/webm output */
+function exportMediaRecorderVideo(w, h, targetExt) {
+  targetExt = targetExt || 'mp4';
+  showProg('正在导出视频...');
+  setSubtext(`输出 ${w}×${h} · ${targetExt.toUpperCase()}`);
   setStatus('正在录制...');
 
   const ec = document.createElement('canvas'); ec.width = w; ec.height = h;
@@ -755,14 +776,17 @@ function exportMediaRecorderMP4(w, h) {
     if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
     if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
   }
-  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  // If browser only supports webm, override target extension
+  const actualExt = mime.startsWith('video/mp4') ? targetExt : 'webm';
+  // For mov/mp4, the MIME stays video/mp4 (binary compatible containers)
+  const blobMime = mime.startsWith('video/mp4') ? 'video/mp4' : mime;
 
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   rec.onstop = () => {
-    const blob = new Blob(chunks, { type: mime });
-    download(blob, `LightTrace.${ext}`);
-    hideProg(); setStatus(`视频导出完成！(${w}×${h} · ${ext.toUpperCase()})`);
+    const blob = new Blob(chunks, { type: blobMime });
+    download(blob, `LightTrace.${actualExt}`);
+    hideProg(); setStatus(`视频导出完成！(${w}×${h} · ${actualExt.toUpperCase()})`);
   };
   rec.start();
 
