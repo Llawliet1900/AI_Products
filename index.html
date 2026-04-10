@@ -575,19 +575,62 @@ function makeBuf(w, h) {
 
 /* ================================================================
    Export Video — MP4 via WebCodecs + mp4-muxer, WebM via MediaRecorder
+   Auto-fallback: WebCodecs → MediaRecorder on unsupported devices
    ================================================================ */
+
+// Check if WebCodecs H.264 encoding is actually supported
+async function findSupportedCodec(w, h, fps) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  // Try codecs from best to most compatible
+  const candidates = [
+    'avc1.640028', // High Profile L4.0
+    'avc1.4d0028', // Main Profile L4.0
+    'avc1.42e028', // Baseline Profile L4.0
+    'avc1.4d001f', // Main Profile L3.1
+    'avc1.42e01f', // Baseline Profile L3.1
+  ];
+  for (const codec of candidates) {
+    try {
+      const support = await VideoEncoder.isConfigSupported({
+        codec,
+        width: w,
+        height: h,
+        bitrate: 5_000_000,
+        framerate: fps,
+      });
+      if (support.supported) return codec;
+    } catch (e) { /* skip */ }
+  }
+  return null;
+}
+
 btnVideo.onclick = async () => {
   if (path.length < 3) return;
   const fmt = fmtSelect.value;
-  const { w, h } = getExportDims();
+  let { w, h } = getExportDims();
 
   if (fmt === 'webm') {
     exportWebM(w, h); return;
   }
 
-  // MP4: WebCodecs VideoEncoder + mp4-muxer (hardware H.264, no Worker needed)
-  if (typeof VideoEncoder === 'undefined') {
-    setStatus('当前浏览器不支持 WebCodecs API，请使用 Chrome 94+ 或 Edge 94+');
+  // On iOS/iPadOS, cap resolution to reduce encoding pressure
+  if (isIOS && w * h > 1280 * 720) {
+    const aspect = w / h;
+    h = 720; w = Math.round(h * aspect);
+    w = w % 2 === 0 ? w : w + 1;
+    h = h % 2 === 0 ? h : h + 1;
+  }
+
+  const fps = 30;
+
+  // Try to find a supported WebCodecs H.264 codec
+  setStatus('正在检测编码能力...');
+  const codec = await findSupportedCodec(w, h, fps);
+
+  if (!codec) {
+    // Fallback: use MediaRecorder (works on all browsers)
+    setStatus('当前设备不支持 H.264 编码，自动切换为兼容模式...');
+    exportMediaRecorderMP4(w, h);
     return;
   }
 
@@ -595,30 +638,23 @@ btnVideo.onclick = async () => {
   setSubtext(`输出 ${w}×${h} · MP4 H.264`);
   setStatus('正在渲染帧...');
 
-  const fps = 30;
   const pathDur = path[path.length-1].t;
   const totalMs = pathDur + revealMs;
   const totalFrames = Math.ceil(totalMs / (1000 / fps)) + 1;
-  const frameDurUs = Math.round(1_000_000 / fps); // microseconds
+  const frameDurUs = Math.round(1_000_000 / fps);
 
-  // Create canvas for rendering
   const ec = document.createElement('canvas'); ec.width = w; ec.height = h;
   const ectx = ec.getContext('2d');
   const mb = makeBuf(w, h);
 
-  // Setup mp4-muxer
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
-    video: {
-      codec: 'avc',
-      width: w,
-      height: h,
-    },
+    video: { codec: 'avc', width: w, height: h },
     fastStart: 'in-memory',
   });
 
-  // Setup VideoEncoder
   let encodedFrames = 0;
+  let encoderError = false;
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => {
       muxer.addVideoChunk(chunk, meta);
@@ -628,40 +664,57 @@ btnVideo.onclick = async () => {
     },
     error: (e) => {
       console.error('VideoEncoder error:', e);
-      hideProg();
-      setStatus('视频编码失败: ' + e.message);
+      encoderError = true;
     },
   });
 
-  videoEncoder.configure({
-    codec: 'avc1.640028',
-    width: w,
-    height: h,
-    bitrate: 8_000_000,
-    framerate: fps,
-  });
+  try {
+    videoEncoder.configure({
+      codec,
+      width: w,
+      height: h,
+      bitrate: 5_000_000,
+      framerate: fps,
+    });
+  } catch (e) {
+    hideProg();
+    setStatus('编码器配置失败，自动切换兼容模式...');
+    exportMediaRecorderMP4(w, h);
+    return;
+  }
 
-  // Render & encode frames
   for (let i = 0; i < totalFrames; i++) {
+    if (encoderError) break;
     const elapsed = i * (1000 / fps);
     renderFrameHQ(ectx, w, h, mb, elapsed);
 
-    const frame = new VideoFrame(ec, {
-      timestamp: i * frameDurUs,
-    });
+    const frame = new VideoFrame(ec, { timestamp: i * frameDurUs });
     videoEncoder.encode(frame, { keyFrame: i % 30 === 0 });
     frame.close();
 
     setProg((i / totalFrames) * 0.5);
     setSubtext(`渲染帧 ${i + 1}/${totalFrames}`);
-
-    // Yield to UI thread every few frames
     if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
   }
 
-  setSubtext('等待编码完成...');
-  await videoEncoder.flush();
-  videoEncoder.close();
+  if (encoderError) {
+    try { videoEncoder.close(); } catch(e) {}
+    hideProg();
+    setStatus('编码出错，自动切换兼容模式...');
+    exportMediaRecorderMP4(w, h);
+    return;
+  }
+
+  try {
+    setSubtext('等待编码完成...');
+    await videoEncoder.flush();
+    videoEncoder.close();
+  } catch (e) {
+    hideProg();
+    setStatus('编码完成阶段出错，自动切换兼容模式...');
+    exportMediaRecorderMP4(w, h);
+    return;
+  }
 
   muxer.finalize();
   const { buffer } = muxer.target;
@@ -672,6 +725,50 @@ btnVideo.onclick = async () => {
   hideProg();
   setStatus(`MP4 视频导出完成！(${w}×${h})`);
 };
+
+/* MediaRecorder fallback for MP4 (actually records as webm/mp4 depending on browser) */
+function exportMediaRecorderMP4(w, h) {
+  showProg('正在导出视频（兼容模式）...');
+  setSubtext(`输出 ${w}×${h}`);
+  setStatus('正在录制...');
+
+  const ec = document.createElement('canvas'); ec.width = w; ec.height = h;
+  const ectx = ec.getContext('2d');
+  const mb = makeBuf(w, h);
+
+  const stream = ec.captureStream(30);
+  const chunks = [];
+  // Try mp4 first (Safari/WebKit), then webm
+  let mime = 'video/mp4';
+  if (!MediaRecorder.isTypeSupported(mime)) {
+    mime = 'video/webm;codecs=vp9';
+    if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
+    if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
+  }
+  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(chunks, { type: mime });
+    download(blob, `LightTrace.${ext}`);
+    hideProg(); setStatus(`视频导出完成！(${w}×${h} · ${ext.toUpperCase()})`);
+  };
+  rec.start();
+
+  const pathDur = path[path.length-1].t;
+  const total = pathDur + revealMs + 200;
+  const startT = performance.now();
+
+  function tick() {
+    const el = performance.now() - startT;
+    setProg(Math.min(el / total, 1));
+    renderFrameHQ(ectx, w, h, mb, el);
+    if (el < total) requestAnimationFrame(tick);
+    else rec.stop();
+  }
+  requestAnimationFrame(tick);
+}
 
 /* WebM via native MediaRecorder */
 function exportWebM(w, h) {
